@@ -1,0 +1,40 @@
+# Network detections
+title: Long random-looking DNS label (possible tunneling)
+id: dns_tunnel_label
+name: dns_tunnel_label
+description: DNS query whose first label is 40 or more random-looking characters, a common DNS tunneling pattern.
+level: medium
+tags: [attack.command-and-control, attack.t1071.004]
+logsource: {category: dns}
+detection:
+  selection:
+    query.hostname|re: '^[a-z0-9]{40,}\.'
+  condition: selection
+---
+title: Large outbound transfer to an external address
+id: net_large_egress
+name: net_large_egress
+description: More than 100 MB sent to a non-RFC1918 destination in a single flow.
+level: high
+tags: [attack.exfiltration, attack.t1048]
+logsource: {category: network_connection}
+detection:
+  big:
+    traffic.bytes_out|gte: 100000000
+  internal:
+    dst_endpoint.ip|cidr: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  condition: big and not internal
+---
+title: RDP connection from an external address
+id: net_rdp_external
+name: net_rdp_external
+description: Inbound RDP (3389) from a non-private source, exposed remote access.
+level: high
+tags: [attack.lateral-movement, attack.t1021.001, attack.initial-access, attack.t1078]
+logsource: {category: network_connection}
+detection:
+  rdp:
+    dst_endpoint.port: 3389
+  internal:
+    src_endpoint.ip|cidr: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  condition: rdp and not internal

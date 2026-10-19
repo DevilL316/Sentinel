@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel SOC Console</title>
+<style>
+  :root { --bg:#0f1419; --panel:#171e26; --line:#26313d; --text:#dde5ee; --dim:#8a99a8; --accent:#4cc2ff;
+          --crit:#ff5c7a; --high:#ff9f43; --med:#f7d154; --low:#6fd6a0; --info:#7d8fa3; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f6f9; --panel:#fff; --line:#d9e0e8; --text:#17202a; --dim:#5d6b7a; --accent:#0a6fb5;
+            --crit:#c4163a; --high:#c76a00; --med:#9a7b00; --low:#1c8a55; --info:#5d6b7a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.04em; }
+  .chip { font-size:12px; padding:2px 8px; border:1px solid var(--line); border-radius:99px; color:var(--dim); }
+  nav { display:flex; gap:4px; padding:8px 20px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  nav button { background:none; border:0; color:var(--dim); padding:8px 14px; cursor:pointer; border-bottom:2px solid transparent; font:inherit; }
+  nav button.on { color:var(--text); border-color:var(--accent); }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .big { font-size:28px; font-weight:600; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  tr.click { cursor:pointer; } tr.click:hover { background:rgba(127,127,127,.08); }
+  .sev { font-weight:600; font-size:12px; text-transform:uppercase; }
+  .s5,.s6 { color:var(--crit); } .s4 { color:var(--high); } .s3 { color:var(--med); } .s2 { color:var(--low); } .s1 { color:var(--info); }
+  button.act { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button.alt { background:none; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button.danger { background:var(--crit); color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .cols { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); }
+  .tac { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px; min-height:80px; }
+  .tac h4 { margin:0 0 6px; font-size:11px; color:var(--dim); text-transform:uppercase; }
+  .tac .t { display:inline-block; font-size:11px; margin:2px; padding:1px 6px; border-radius:4px; background:var(--accent); color:#fff; }
+  .tac.new h4::after { content:" new in v19"; color:var(--accent); }
+  pre { background:var(--panel); border:1px solid var(--line); padding:10px; border-radius:6px; overflow:auto; font-size:12px; }
+  h2 { font-size:15px; margin:20px 0 8px; } .dim { color:var(--dim); } input { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  .pill { padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .pill.wait { color:var(--high); border-color:var(--high); } .pill.ok { color:var(--low); border-color:var(--low); } .pill.bad { color:var(--crit); border-color:var(--crit); }
+</style>
+</head>
+<body>
+<header>
+  <h1>SENTINEL</h1><span id="chips"></span>
+  <span style="flex:1"></span>
+  <input id="key" type="password" placeholder="API key (paste here)" size="22" autocomplete="off">
+  <input id="who" value="soc_lead" size="10" title="Acting approver">
+</header>
+<nav id="nav"></nav>
+<main id="view"></main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const SEV = {1:"info",2:"low",3:"medium",4:"high",5:"critical",6:"fatal"};
+const sev = n => `<span class="sev s${n}">${SEV[n]||n}</span>`;
+const ago = ts => { const s = Math.max(0, (Date.now()-ts)/1000|0); return s<60? s+"s ago" : s<3600? (s/60|0)+"m ago" : (s/3600|0)+"h ago"; };
+let tab = "overview", openCase = null;
+
+async function api(path, opts = {}) {
+  const k = $("#key").value.trim();
+  const r = await fetch("/api" + path, { ...opts, headers: { "content-type": "application/json", ...(k ? {"x-api-key": k} : {}) } });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+  return r.json();
+}
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
+
+const TABS = ["overview","alerts","cases","approvals","coverage","playbooks"];
+function nav() { $("#nav").innerHTML = TABS.map(t => `<button class="${t===tab?'on':''}" data-t="${t}">${t[0].toUpperCase()+t.slice(1)}</button>`).join("");
+  document.querySelectorAll("#nav button").forEach(b => b.onclick = () => { tab = b.dataset.t; openCase = null; render(); }); }
+
+async function render() {
+  nav();
+  try {
+    const m = await api("/meta");
+    $("#chips").innerHTML = [`OCSF ${m.ocsf}`, `ATT&CK ${m.attack}`, `Sigma ${m.sigma_spec}`, `triage: ${m.ai_triage}`, m.dry_run ? "dry-run" : "LIVE"].map(c => `<span class="chip">${esc(c)}</span> `).join("");
+    await views[tab](m);
+  } catch (e) {
+    const needKey = /X-API-Key/i.test(e.message);
+    $("#view").innerHTML = needKey
+      ? `<div class="card"><b>API key required.</b><p>Paste your SENTINEL_API_KEY into the box at the top right. This page reloads by itself once you do.</p></div>`
+      : `<div class="card">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+const views = {
+  async overview(m) {
+    const sc = await api("/simulate");
+    $("#view").innerHTML = `
+      <div class="grid">${Object.entries(m.counts).map(([k,v]) => `<div class="card"><div class="dim">${esc(k)}</div><div class="big">${v}</div></div>`).join("")}
+        <div class="card"><div class="dim">detections</div><div class="big">${m.rules + m.correlations}</div><div class="dim">${m.correlations} correlation</div></div></div>
+      <h2>Run an attack scenario</h2><p class="dim">Synthetic logs from documentation IP ranges. Containment actions are simulated.</p>
+      <div class="row">${sc.map(s => `<button class="alt" data-s="${esc(s)}">${esc(s.replaceAll("_"," "))}</button>`).join("")}</div><div id="out" class="dim"></div>`;
+    document.querySelectorAll("[data-s]").forEach(b => b.onclick = async () => {
+      const r = await post("/simulate/" + b.dataset.s);
+      $("#out").textContent = `${r.stored} events ingested, ${r.alerts.length} alerts raised.`; setTimeout(render, 600); });
+  },
+  async alerts() {
+    const a = await api("/alerts?limit=200");
+    $("#view").innerHTML = a.length ? `<table><tr><th>Severity</th><th>Alert</th><th>Entities</th><th>ATT&CK</th><th>When</th></tr>${a.map(x => `
+      <tr class="click" data-c="${esc(x.case_id)}"><td>${sev(x.severity)}</td><td>${esc(x.title)}<div class="dim">${esc(x.kind)} · ${x.event_count} event(s)</div></td>
+      <td class="dim">${Object.entries(x.entities).filter(([k])=>["src_ip","user","host"].includes(k)).map(([k,v])=>esc(k+"="+v)).join("<br>")}</td>
+      <td>${x.attack.map(t => esc(t.technique ? t.technique.uid : "legacy tag")).join(", ")}</td><td class="dim">${ago(x.ts)}</td></tr>`).join("")}</table>`
+      : `<div class="card dim">No alerts yet. Run a scenario from Overview.</div>`;
+    document.querySelectorAll("tr[data-c]").forEach(r => r.onclick = () => { tab = "cases"; openCase = r.dataset.c; render(); });
+  },
+  async cases() {
+    if (openCase) return caseDetail(openCase);
+    const c = await api("/cases");
+    $("#view").innerHTML = c.length ? `<table><tr><th>Severity</th><th>Case</th><th>Status</th><th>Alerts</th><th>Entities</th><th>Opened</th></tr>${c.map(x => `
+      <tr class="click" data-c="${esc(x.id)}"><td>${sev(x.severity)}</td><td>${esc(x.title)}</td><td>${esc(x.status)}</td><td>${x.alerts.length}</td>
+      <td class="dim">${Object.entries(x.entities).filter(([k])=>["src_ip","user","host"].includes(k)).map(([k,v])=>esc(v)).join(", ")}</td><td class="dim">${ago(x.ts)}</td></tr>`).join("")}</table>`
+      : `<div class="card dim">No cases yet.</div>`;
+    document.querySelectorAll("tr[data-c]").forEach(r => r.onclick = () => { openCase = r.dataset.c; render(); });
+  },
+  async approvals() {
+    const runs = await api("/runs?status=awaiting_approval");
+    $("#view").innerHTML = runs.length ? runs.map(r => { const st = r.steps[r.cursor]; return `
+      <div class="card" style="margin-bottom:12px"><b>${esc(r.playbook)}</b> <span class="pill wait">awaiting approval</span>
+      <p>Step <b>${esc(st.id)}</b> wants to run <code>${esc(st.action)}</code> with:</p><pre>${esc(JSON.stringify(st.approval.proposed, null, 2))}</pre>
+      <div class="dim">Eligible approvers: ${esc(st.approval.approvers.join(", "))}</div>
+      <div class="row"><button class="act" data-a="approve" data-r="${esc(r.id)}">Approve</button><button class="danger" data-a="deny" data-r="${esc(r.id)}">Deny</button>
+      <button class="alt" data-case="${esc(r.case_id)}">Open case</button></div></div>`; }).join("")
+      : `<div class="card dim">Nothing is waiting for approval.</div>`;
+    document.querySelectorAll("[data-a]").forEach(b => b.onclick = async () => {
+      try { await post(`/runs/${b.dataset.r}/${b.dataset.a}`, { approver: $("#who").value, comment: "via console" }); } catch (e) { alert(e.message); } render(); });
+    document.querySelectorAll("[data-case]").forEach(b => b.onclick = () => { tab = "cases"; openCase = b.dataset.case; render(); });
+  },
+  async coverage() {
+    const c = await api("/coverage");
+    $("#view").innerHTML = `<p class="dim">${c.covered_techniques.length} of ${c.catalog_size} bundled techniques covered. v19 replaced Defense Evasion with Stealth and Defense Impairment.</p>
+      <div class="cols">${Object.entries(c.tactics).map(([t, ids]) => `<div class="tac ${["stealth","defense-impairment"].includes(t)?"new":""}"><h4>${esc(t.replaceAll("-"," "))}</h4>${ids.map(i=>`<span class="t">${esc(i)}</span>`).join("") || '<span class="dim">no coverage</span>'}</div>`).join("")}</div>
+      ${c.legacy_tagged_rules.length ? `<h2>Rules still using retired tags</h2><div class="card">${c.legacy_tagged_rules.map(esc).join(", ")}<div class="dim">Re-map to Stealth or Defense Impairment.</div></div>` : ""}`;
+  },
+  async playbooks() {
+    const p = await api("/playbooks");
+    $("#view").innerHTML = p.map(x => `<div class="card" style="margin-bottom:12px"><b>${esc(x.name)}</b><div class="dim">trigger: ${esc(JSON.stringify(x.trigger))}</div>
+      <div class="row">${x.steps.map(s => `<span class="pill ${s.requires_approval?'wait':''}">${esc(s.id)}: ${esc(s.action)}${s.requires_approval?" 🔒":""}</span>`).join(" → ")}</div></div>`).join("");
+  }
+};
+
+async function caseDetail(id) {
+  const c = await api("/cases/" + id);
+  const t = c.triage;
+  $("#view").innerHTML = `<button class="alt" id="back">← Cases</button>
+    <h2>${sev(c.severity)} ${esc(c.title)} <span class="chip">${esc(c.status)}</span></h2>
+    <div class="dim">${Object.entries(c.entities).map(([k,v])=>esc(k+"="+v)).join(" · ")}</div>
+    <h2>AI triage ${t ? `<span class="chip">${esc(t.source)}</span>` : ""}</h2>
+    ${t ? `<div class="card"><b>${esc(t.verdict.replaceAll("_"," "))}</b> · confidence ${t.confidence}<p>${esc(t.summary)}</p><ul>${t.reasoning.map(r=>`<li>${esc(r)}</li>`).join("")}</ul>
+      <div class="dim">Suggested: ${t.recommended_actions.map(esc).join(", ")}. Suggestions only; actions run through playbooks.</div></div>`
+      : `<button class="act" id="tri">Run triage on first alert</button>`}
+    <h2>Playbook runs</h2>${c.runs.map(r => `<div class="card" style="margin-bottom:8px"><b>${esc(r.playbook)}</b> <span class="pill ${r.status==='completed'?'ok':r.status==='failed'?'bad':'wait'}">${esc(r.status)}</span>
+      <div class="row">${r.steps.map(s => `<span class="pill ${s.status==='done'?'ok':s.status==='awaiting_approval'?'wait':s.status==='denied'||s.status==='failed'?'bad':''}">${esc(s.id)}: ${esc(s.status)}</span>`).join("")}</div></div>`).join("") || '<div class="dim">None.</div>'}
+    <h2>Alerts</h2>${c.alert_docs.map(a => `<div class="card" style="margin-bottom:8px">${sev(a.severity)} ${esc(a.title)}<div class="dim">${esc(a.description)}</div></div>`).join("")}
+    <h2>Timeline & notes</h2><div class="card">${[...c.timeline].reverse().map(x => `<div><span class="dim">${ago(x.ts)}</span> ${esc(x.text)}</div>`).join("")}</div>
+    ${c.notes.map(n => `<div class="card" style="margin-top:8px"><span class="dim">${esc(n.author)}</span> ${esc(n.text)}</div>`).join("")}
+    <div class="row"><input id="note" placeholder="Add a note" size="40"><button class="alt" id="addn">Add</button>
+      <button class="alt" id="close">${c.status==="closed"?"Reopen":"Close case"}</button></div>`;
+  $("#back").onclick = () => { openCase = null; render(); };
+  if ($("#tri")) $("#tri").onclick = async () => { await post(`/alerts/${c.alerts[0]}/triage`); render(); };
+  $("#addn").onclick = async () => { if ($("#note").value) { await post(`/cases/${id}/notes`, { author: $("#who").value, text: $("#note").value }); render(); } };
+  $("#close").onclick = async () => { await api("/cases/" + id, { method: "PATCH", body: JSON.stringify({ status: c.status === "closed" ? "open" : "closed" }) }); render(); };
+}
+try { $("#key").value = sessionStorage.getItem("sentinel_key") || ""; } catch (e) {}
+let keyTimer;
+$("#key").addEventListener("input", () => {
+  clearTimeout(keyTimer);
+  keyTimer = setTimeout(() => { try { sessionStorage.setItem("sentinel_key", $("#key").value.trim()); } catch (e) {} render(); }, 300);
+});
+render(); setInterval(() => { if (!openCase && document.activeElement.tagName !== "INPUT") render(); }, 8000);
+</script>
+</body>
+</html>

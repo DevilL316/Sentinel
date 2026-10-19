@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# build output and local build environment
+build/
+dist/
+.build-venv/
+
+# runtime state: never commit the API key or the event database
+data/
+sentinel.db
+sentinel.env

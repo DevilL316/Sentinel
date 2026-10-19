@@ -1,0 +1,25 @@
+id: pb_endpoint_compromise
+name: Endpoint compromise containment
+description: Triage suspicious endpoint behavior and isolate the host after approval.
+trigger:
+  tactics: [execution, credential-access, impact, stealth, defense-impairment]
+  min_severity: 4
+steps:
+  - id: triage
+    action: ai_triage
+    params: {}
+  - id: ticket
+    action: create_ticket
+    params: {title: "{{ alert.title }} on {{ alert.entities.host }}"}
+  - id: isolate
+    action: isolate_host
+    requires_approval: true
+    approvers: [soc_lead, ir_manager]
+    when:
+      any:
+        - {path: alert.severity, gte: 5}
+        - {path: steps.triage.output.verdict, equals: true_positive_likely}
+    params: {host: "{{ alert.entities.host }}"}
+  - id: tell
+    action: notify
+    params: {channel: "#soc-alerts", message: "Endpoint alert: {{ alert.title }} on {{ alert.entities.host }}"}

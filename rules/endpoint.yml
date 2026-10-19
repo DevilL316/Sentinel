@@ -1,0 +1,131 @@
+# Endpoint detections
+title: Encoded PowerShell command
+id: proc_encoded_powershell
+name: proc_encoded_powershell
+description: PowerShell launched with an encoded command, common in loaders and hands-on-keyboard intrusions.
+status: stable
+level: high
+tags: [attack.execution, attack.t1059.001]
+logsource: {category: process_creation}
+detection:
+  image:
+    process.name: [powershell.exe, pwsh.exe]
+  encoded:
+    process.cmd_line|contains: [' -enc ', ' -encodedcommand ', ' -e ']
+  condition: image and encoded
+---
+# Sigma 2.0 filter: known deployment account is excluded from the rule above
+filter:
+  rules: [proc_encoded_powershell]
+  selection:
+    actor.user.name: svc_deploy
+  condition: selection
+---
+title: Office application spawned a script interpreter
+id: proc_office_child_shell
+name: proc_office_child_shell
+description: Word, Excel or Outlook starting cmd, PowerShell or a scripting host, typical of malicious documents.
+status: stable
+level: high
+tags: [attack.execution, attack.t1204, attack.t1059.001]
+logsource: {category: process_creation}
+detection:
+  parent:
+    process.parent_process.name: [winword.exe, excel.exe, outlook.exe, powerpnt.exe]
+  child:
+    process.name: [cmd.exe, powershell.exe, pwsh.exe, wscript.exe, cscript.exe, mshta.exe]
+  condition: parent and child
+---
+title: LSASS memory dumping
+id: proc_lsass_dump
+name: proc_lsass_dump
+description: Tooling or command lines used to dump LSASS memory for credential theft.
+status: stable
+level: critical
+tags: [attack.credential-access, attack.t1003.001]
+logsource: {category: process_creation}
+detection:
+  comsvcs:
+    process.cmd_line|contains|all: [comsvcs.dll, minidump]
+  procdump:
+    process.cmd_line|contains|all: [procdump, lsass]
+  condition: 1 of them
+---
+title: Security event log cleared
+id: log_cleared
+name: log_cleared
+description: Windows security audit log was cleared (event 1102), a strong indicator of anti-forensics.
+status: stable
+level: high
+tags: [attack.stealth, attack.t1070.001]
+detection:
+  selection:
+    unmapped.event: audit_log_cleared
+  condition: selection
+---
+title: Recovery inhibition (shadow copies / backups deleted)
+id: proc_inhibit_recovery
+name: proc_inhibit_recovery
+description: Deleting shadow copies or backup catalogs, a typical step before ransomware encryption.
+status: stable
+level: critical
+tags: [attack.impact, attack.t1490]
+logsource: {category: process_creation}
+detection:
+  vss:
+    process.cmd_line|contains|all: [vssadmin, delete, shadows]
+  wbadmin:
+    process.cmd_line|contains|all: [wbadmin, delete]
+  condition: 1 of them
+---
+title: Defender real-time protection disabled
+id: proc_disable_defender
+name: proc_disable_defender
+description: PowerShell used to switch off Microsoft Defender protections.
+status: stable
+level: high
+tags: [attack.defense-impairment, attack.t1562.001]
+logsource: {category: process_creation}
+detection:
+  selection:
+    process.cmd_line|contains|all: [set-mppreference, disablerealtimemonitoring]
+  condition: selection
+---
+title: Certutil used to download a file
+id: proc_certutil_download
+name: proc_certutil_download
+description: certutil with urlcache or split flags pulling content from the network.
+level: medium
+tags: [attack.command-and-control, attack.t1105]
+logsource: {category: process_creation}
+detection:
+  selection:
+    process.name: certutil.exe
+    process.cmd_line|contains: [urlcache, '-split']
+  condition: selection
+---
+title: Rundll32 launched from a user-writable path
+id: proc_rundll32_temp
+name: proc_rundll32_temp
+description: Proxy execution through rundll32 using a DLL in temp or user profile paths. Carries the legacy defense-evasion tag on purpose, to show how un-migrated tags are flagged.
+level: medium
+tags: [attack.defense-evasion, attack.t1218]
+logsource: {category: process_creation}
+detection:
+  selection:
+    process.name: rundll32.exe
+    process.cmd_line|contains: ['\temp\', '\appdata\', '\users\public\']
+  condition: selection
+---
+title: Interactive root shell via sudo
+id: proc_sudo_shell
+name: proc_sudo_shell
+description: sudo used to start an interactive shell.
+level: low
+tags: [attack.privilege-escalation, attack.t1548.003]
+logsource: {category: process_creation}
+detection:
+  selection:
+    process.cmd_line|re: '^(/usr)?/bin/(ba|z|da)?sh(\s|$)'
+    process.name|startswith: /
+  condition: selection

@@ -1,0 +1,105 @@
+# Identity & authentication detections (Sigma 2.0 style, evaluated on OCSF events)
+title: Authentication failure
+id: auth_failure
+name: auth_failure
+description: Any failed authentication. Building block for the brute-force and spraying correlations.
+status: stable
+level: low
+tags: [attack.credential-access, attack.t1110.001]
+logsource: {category: authentication}
+detection:
+  selection:
+    status_id: 2
+  condition: selection
+---
+title: Authentication success from remote address
+id: auth_success
+name: auth_success
+description: Successful authentication with a known source address. Used in the compromise-after-guessing correlation.
+status: stable
+level: informational
+tags: [attack.initial-access, attack.t1078]
+logsource: {category: authentication}
+detection:
+  selection:
+    status_id: 1
+    src_endpoint.ip|exists: true
+  condition: selection
+---
+title: Brute force - many failures from one source
+id: corr_bruteforce
+name: corr_bruteforce
+description: Five or more failed logons from the same source address within five minutes.
+status: stable
+level: high
+tags: [attack.credential-access, attack.t1110]
+correlation:
+  type: event_count
+  rules: [auth_failure]
+  group-by: [src_endpoint.ip]
+  timespan: 5m
+  condition: {gte: 5}
+---
+title: Password spraying - one source, many accounts
+id: corr_spray
+name: corr_spray
+description: Failed logons against four or more distinct accounts from one source within ten minutes.
+status: stable
+level: high
+tags: [attack.credential-access, attack.t1110.003]
+correlation:
+  type: value_count
+  rules: [auth_failure]
+  group-by: [src_endpoint.ip]
+  timespan: 10m
+  condition: {field: user.name, gte: 4}
+---
+title: Successful logon after repeated failures (possible account compromise)
+id: corr_guess_then_success
+name: corr_guess_then_success
+description: Failures followed by a success from the same source within 15 minutes. Guessing may have worked.
+status: stable
+level: critical
+tags: [attack.initial-access, attack.t1078, attack.t1110]
+correlation:
+  type: temporal_ordered
+  rules: [auth_failure, auth_success]
+  group-by: [src_endpoint.ip]
+  timespan: 15m
+---
+title: Account created
+id: acct_created
+name: acct_created
+description: A new account appeared. Building block for the persistence correlation.
+level: informational
+tags: [attack.persistence, attack.t1136.001]
+logsource: {category: account_change}
+detection:
+  selection:
+    activity_id: 1
+  condition: selection
+---
+title: Account added to privileged group
+id: acct_priv_group
+name: acct_priv_group
+description: Account attached to an administrative group.
+level: informational
+tags: [attack.persistence, attack.t1098]
+logsource: {category: account_change}
+detection:
+  selection:
+    activity_id: 7
+    group.name|contains: [admin, wheel, sudo]
+  condition: selection
+---
+title: New account promoted to administrator
+id: corr_new_admin
+name: corr_new_admin
+description: An account was created and added to an administrative group within 30 minutes.
+level: high
+tags: [attack.persistence, attack.t1136.001, attack.t1098]
+correlation:
+  type: temporal
+  rules: [acct_created, acct_priv_group]
+  group-by: [user.name]
+  timespan: 30m

@@ -1,0 +1,37 @@
+id: pb_credential_attack
+name: Credential attack response
+description: Enrich the source, triage with AI, open a ticket, and block the address after human approval.
+trigger:
+  rule_ids: [corr_bruteforce, corr_spray, corr_guess_then_success]
+  min_severity: 4
+steps:
+  - id: intel
+    action: enrich_ip
+    params: {ip: "{{ alert.entities.src_ip }}"}
+  - id: who
+    action: enrich_user
+    params: {user: "{{ alert.entities.user }}"}
+  - id: triage
+    action: ai_triage
+    params: {intel_step: intel}
+  - id: ticket
+    action: create_ticket
+    params: {title: "{{ alert.title }}"}
+  - id: reset
+    action: reset_credentials
+    when: {path: alert.rule_id, equals: corr_guess_then_success}
+    requires_approval: true
+    approvers: [soc_lead, ir_manager]
+    params: {user: "{{ alert.entities.user }}"}
+  - id: block
+    action: block_ip
+    requires_approval: true
+    approvers: [soc_lead, ir_manager]
+    when:
+      any:
+        - {path: steps.intel.output.reputation, equals: malicious}
+        - {path: alert.severity, gte: 5}
+    params: {ip: "{{ alert.entities.src_ip }}"}
+  - id: tell
+    action: notify
+    params: {channel: "#soc-alerts", message: "{{ alert.title }} from {{ alert.entities.src_ip }} - see case {{ case_id }}"}
